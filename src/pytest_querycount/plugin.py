@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from pytest_querycount import backends, checks, report
+from pytest_querycount import backends, checks, report, writer
 from pytest_querycount.checks import DEFAULT_DUPLICATE_THRESHOLD, DEFAULT_KINDS, Budget
 from pytest_querycount.recorder import Recorder
 
 RECORDER_KEY = pytest.StashKey[Recorder]()
 _STATS: dict[str, report.TestStats] = {}
+
+# path -> {qualname: observed count}, gathered for --querycount-write-budgets.
+_OBSERVED: dict[Path, dict[str, int]] = {}
 
 
 # -- configuration ---------------------------------------------------------
@@ -39,6 +43,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         metavar="N",
         help="Apply a query budget of N to every test that has no explicit one.",
+    )
+    group.addoption(
+        "--querycount-write-budgets",
+        action="store_true",
+        default=False,
+        help=(
+            "Write @pytest.mark.max_queries markers into your test files using "
+            "the counts observed in this run, then exit without enforcing them. "
+            "MODIFIES YOUR FILES -- review the diff afterwards."
+        ),
     )
     group.addoption(
         "--querycount-no-seq-scan",
@@ -80,6 +94,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "sequentially because no index could serve its filter. PostgreSQL only.",
     )
     _STATS.clear()
+    _OBSERVED.clear()
     backends.install_all()
 
 
@@ -126,6 +141,11 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None, object, object]:
         backends.pop(recorder)
 
     _record_stats(item, recorder)
+
+    if item.config.getoption("querycount_write_budgets"):
+        _observe(item, recorder)
+        return result
+
     checks.enforce(budget, recorder, label=item.name)
     return result
 
@@ -141,6 +161,24 @@ def _record_stats(item: pytest.Item, recorder: Recorder) -> None:
         worst_duplicate=duplicates[0].count if duplicates else 0,
         worst_sql=duplicates[0].sample.short_sql() if duplicates else None,
     )
+
+
+def _observe(item: pytest.Item, recorder: Recorder) -> None:
+    """Remember what a passing test ran, so a marker can be written for it.
+
+    Only passing tests: a test that failed part way through ran an arbitrary
+    number of queries, and freezing that number as a budget would be nonsense.
+    """
+    if not recorder.count:
+        return
+    function = getattr(item, "function", None)
+    qualname = getattr(function, "__qualname__", None)
+    if qualname is None:
+        return
+
+    per_file = _OBSERVED.setdefault(Path(str(item.path)), {})
+    # Parametrised cases share one function, so the widest run wins.
+    per_file[qualname] = max(per_file.get(qualname, 0), recorder.count)
 
 
 def _budget_for(item: pytest.Item) -> Budget:
@@ -274,6 +312,10 @@ def pytest_terminal_summary(
     exitstatus: int,
     config: pytest.Config,
 ) -> None:
+    if config.getoption("querycount_write_budgets"):
+        _write_budgets(terminalreporter)
+        return
+
     if not config.getoption("querycount_report"):
         return
     lines = report.build(_STATS, top=int(config.getoption("querycount_top")))
@@ -281,4 +323,11 @@ def pytest_terminal_summary(
         return
     terminalreporter.write_sep("=", "querycount summary")
     for line in lines:
+        terminalreporter.write_line(line)
+
+
+def _write_budgets(terminalreporter: Any) -> None:
+    results = [writer.rewrite_file(path, counts) for path, counts in sorted(_OBSERVED.items())]
+    terminalreporter.write_sep("=", "querycount: budgets written")
+    for line in writer.summarise(results):
         terminalreporter.write_line(line)

@@ -23,7 +23,9 @@ CI run, naming the repeated query and the line of your code that caused it.
 ## Install
 
 ```bash
-pip install "pytest-querycount[sqlalchemy]"
+pip install "pytest-querycount[sqlalchemy]"     # budgets and N+1 detection
+pip install "pytest-querycount[postgresql]"     # and the missing-index check
+pip install "pytest-querycount[asyncio]"        # for async engines
 ```
 
 Requires Python 3.10+, pytest 8+, and SQLAlchemy 2.x. There is nothing to
@@ -147,6 +149,50 @@ Three things this is careful about:
 Needs `pip install "pytest-querycount[postgresql]"`. On SQLite or MySQL the check
 raises rather than passing, because a check that cannot fail is not a check.
 
+### Adopting this on a suite that already exists
+
+The honest problem with query budgets is the first day. Nobody is going to read
+five hundred failures and type five hundred numbers, so in practice a plugin like
+this gets installed, switched on once, and switched off again.
+
+```bash
+pytest --querycount-write-budgets
+```
+
+That runs the suite and writes the markers for you, each holding the count that
+test actually ran:
+
+```diff
++@pytest.mark.max_queries(5)
+ def test_list_shops(db):
+     for shop in db.scalars(select(Shop)):
+         len(shop.items)
+
++@pytest.mark.max_queries(2)
+ def test_list_shops_eagerly(db):
+     ...
+
+ class TestItems:
++    @pytest.mark.max_queries(1)
+     def test_count(self, db):
+         ...
+```
+
+It does not enforce anything on that run -- enforcing a budget while deciding
+what it should be is contradictory. Then you commit the diff and every later run
+holds the suite to it.
+
+The numbers are exact on purpose. A budget with slack in it is not a ratchet: the
+point is that the next query added to that code path turns a test red. Where a
+number looks wrong, that is a finding, not a problem with the tool -- widen it by
+hand and leave a comment saying why.
+
+What it will not do: touch a test that already has a budget, write one for a test
+that failed (its count is whatever it reached before blowing up), or touch a file
+it cannot parse. The editing goes through Python's `ast`, so decorators, classes,
+`async def` and multi-line signatures all land correctly, and two `test_create`
+methods in different classes are never confused for each other.
+
 ### A fixture, for when a marker is too coarse
 
 A marker covers the whole test. When you only care about one block:
@@ -164,6 +210,29 @@ def test_detail(db, querycount):
 Call it with no arguments to observe without asserting -- that is how you find
 out what the budget should be before committing to one. The object from the
 `with` is the recorder, and it keeps its records after the block ends.
+
+### asyncio
+
+Async engines are instrumented with no extra configuration, and failures still
+name the line of your code that emitted the query.
+
+```python
+@pytest.mark.max_queries(2)
+async def test_authors(session):
+    await list_authors(session)
+```
+
+That second part took work, and is worth knowing about if you are comparing
+tools. SQLAlchemy runs its synchronous internals inside a greenlet spawned per
+operation, so the stack at the moment a query is emitted begins at SQLAlchemy's
+own entry point: your awaiting frames are on a different greenlet's stack, and an
+ordinary stack walk never reaches them. Until 0.4.0 this plugin's async failures
+arrived with no origin at all. It now crosses the greenlet boundary.
+
+The plan check works under async PostgreSQL too, including the savepoint that
+keeps `enable_seqscan` and your transaction intact.
+
+Needs `pip install "pytest-querycount[asyncio]"`, which brings greenlet with it.
 
 ### The report you leave switched on
 
@@ -194,6 +263,7 @@ suite: run it once, look at the rows with a `!`, write budgets for those.
 | `--querycount-top=N` | How many tests the table lists (default 10) |
 | `--querycount-max=N` | Apply a budget of N to every test without an explicit one |
 | `--querycount-no-seq-scan` | Apply the missing-index check to every test |
+| `--querycount-write-budgets` | Write the markers for you, then exit without enforcing. **Modifies your files.** |
 
 `--querycount-max` is how you ratchet: set it just above your current worst
 test, then lower it as you fix things.
@@ -237,11 +307,14 @@ FastAPI, Flask, Litestar -- where nothing is currently maintained.
 
 ## Limitations
 
-- SQLAlchemy 2.x only for now. Django and raw psycopg are on the roadmap.
+- SQLAlchemy 2.x only, sync and async. Raw psycopg is on the roadmap; Django is
+  not, since `assertNumQueries` already covers the budget half there.
 - Under `pytest-xdist` the summary table is per worker, so it will be partial.
   Budgets and N+1 detection are unaffected.
 - `no_seq_scan` is PostgreSQL only, and costs one `EXPLAIN` per SELECT while
   enabled. Budgets and N+1 detection work on any SQLAlchemy backend.
+- `--querycount-write-budgets` edits your files in place. Run it on a clean
+  working tree so the diff is the only thing you have to review.
 - The suggested `CREATE INDEX` is a starting point, not advice. Which columns to
   index, in what order, and whether the index earns its write cost need the whole
   query pattern, not one plan node. A filter over a function call

@@ -36,7 +36,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
-          python -m pip install "sqlalchemy==${{ matrix.sqlalchemy }}"
+          python -m pip install "sqlalchemy[asyncio]==${{ matrix.sqlalchemy }}"
       - name: Test
         # Without REQUIRE_PG the plan tests would skip on a broken service and
         # the build would still be green, which is the worst outcome.

@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import sys
 from collections import Counter
-from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Iterable, Iterator, Sequence
+from typing import TYPE_CHECKING, Any
 
 from pytest_querycount.records import Duplicate, QueryRecord
 
@@ -26,7 +26,7 @@ _INTERNAL_PATHS = (
     "/threading.py",
 )
 
-_MAX_STACK_DEPTH = 60
+_MAX_STACK_DEPTH = 120
 
 
 def _shorten(path: str) -> str:
@@ -42,19 +42,64 @@ def _shorten(path: str) -> str:
     return path if relative.startswith("..") else relative
 
 
+def _greenlet_module() -> Any:
+    """The greenlet module, or None when it is not installed.
+
+    Imported lazily: greenlet only arrives with ``sqlalchemy[asyncio]``, and a
+    synchronous project should not be made to care that it exists.
+    """
+    try:
+        import greenlet
+    except ImportError:  # pragma: no cover - synchronous install
+        return None
+    return greenlet
+
+
+def _frames(start: FrameType | None) -> Iterator[FrameType]:
+    """Frames from ``start`` outwards, crossing greenlet boundaries.
+
+    Under SQLAlchemy's asyncio support the query is emitted inside a greenlet
+    spawned for it, and that greenlet's stack begins at SQLAlchemy's own entry
+    point -- so following ``f_back`` alone never reaches the caller's code. The
+    awaiting frames live on the *parent* greenlet's stack, which is suspended and
+    reachable through ``gr_frame``.
+
+    Walking that chain is what lets an async test still be told which of its
+    lines emitted the query, rather than being told nothing.
+    """
+    greenlet = _greenlet_module()
+    current = greenlet.getcurrent() if greenlet is not None else None
+
+    frame = start
+    budget = _MAX_STACK_DEPTH
+    while budget > 0:
+        if frame is not None:
+            yield frame
+            frame = frame.f_back
+            budget -= 1
+            continue
+
+        # This greenlet's stack is exhausted. Continue in whoever is waiting on
+        # it. The chain ends at the main greenlet, whose parent is None.
+        if current is None:
+            return
+        current = getattr(current, "parent", None)
+        if current is None:
+            return
+        frame = getattr(current, "gr_frame", None)
+
+
 def caller_location(skip: int = 1) -> str | None:
     """``path:lineno`` of the closest frame that is not library machinery."""
     try:
-        frame: FrameType | None = sys._getframe(skip + 1)
+        start: FrameType | None = sys._getframe(skip + 1)
     except ValueError:  # pragma: no cover - stack shallower than `skip`
         return None
-    depth = 0
-    while frame is not None and depth < _MAX_STACK_DEPTH:
+
+    for frame in _frames(start):
         filename = frame.f_code.co_filename.replace(os.sep, "/")
         if not any(part in filename for part in _INTERNAL_PATHS):
             return f"{_shorten(frame.f_code.co_filename)}:{frame.f_lineno}"
-        frame = frame.f_back
-        depth += 1
     return None
 
 

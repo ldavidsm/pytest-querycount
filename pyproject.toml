@@ -33,11 +33,14 @@ dependencies = ["pytest>=8.0"]
 
 [project.optional-dependencies]
 sqlalchemy = ["sqlalchemy>=2.0"]
+asyncio = ["sqlalchemy[asyncio]>=2.0"]
 postgresql = ["sqlalchemy>=2.0", "psycopg[binary]>=3.1"]
 dev = [
-    "sqlalchemy>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
     "psycopg[binary]>=3.1",
+    "aiosqlite>=0.19",
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
     "mypy>=1.8",
     "ruff>=0.4",
 ]
@@ -70,3 +73,9 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 strict = true
 files = ["src/pytest_querycount"]
+
+# greenlet is an optional runtime dependency, arriving only with
+# sqlalchemy[asyncio], and we touch three attributes of it dynamically.
+[[tool.mypy.overrides]]
+module = ["greenlet"]
+ignore_missing_imports = true

@@ -8,9 +8,55 @@ All notable changes to this project are documented here. The format follows
 
 ### Planned
 
-- Django and raw psycopg backends.
+- Raw psycopg backend, for projects using SQL without an ORM.
 - `pytest-xdist` aware reporting.
-- A `--querycount-write-budgets` mode that inserts the markers for you.
+- More plan checks: sorts spilling to disk, nested loops over large sets.
+
+## [0.4.0] - 2026-09-27
+
+### Added
+
+- `--querycount-write-budgets` writes `@pytest.mark.max_queries` markers into
+  your test files using the counts observed in that run, then exits without
+  enforcing them. This is the answer to adopting a budget on a suite that
+  already has five hundred tests: nobody was ever going to read five hundred
+  failures and type five hundred numbers by hand.
+
+  Source editing goes through `ast`, not regular expressions, because "the line
+  above the def" is not something a regular expression finds reliably once
+  decorators, classes, async definitions and multi-line signatures are involved.
+  It matches on qualified names, so two `test_create` methods in different
+  classes are never confused; it leaves a hand-written budget alone; it skips
+  tests that failed, whose query count is whatever they reached before blowing
+  up; and it refuses to touch a file it cannot parse.
+
+- `asyncio` extra, `pytest-querycount[asyncio]`, which brings in
+  `sqlalchemy[asyncio]` and therefore greenlet.
+
+### Fixed
+
+- **Caller attribution was silently lost under asyncio.** The budget still
+  fired, but every failure came without the one piece of information that makes
+  it actionable -- no "from your_file.py:39" line at all.
+
+  SQLAlchemy runs its synchronous internals inside a greenlet spawned per
+  operation, and that greenlet's stack begins at SQLAlchemy's own entry point,
+  so following `f_back` reached only library frames. The awaiting frames live on
+  the *parent* greenlet's stack, reachable through `gr_frame`, and the walk now
+  crosses that boundary. Since the audience for this plugin is FastAPI and
+  Litestar, where async is the default, this was the most important gap it had.
+
+### Verified rather than assumed
+
+The README claimed async engines were instrumented "sync or async" on the
+strength of reasoning alone. They are, and there are now tests for it -- along
+with tests proving that the three async tests fail without the greenlet fix, so
+they guard something real. The plan check works under async PostgreSQL too: the
+EXPLAIN on a raw DBAPI cursor survives being issued from inside the greenlet,
+and the savepoint still restores `enable_seqscan` and keeps the transaction
+usable there.
+
+102 tests, up from 75.
 
 ## [0.3.0] - 2026-09-26
 
