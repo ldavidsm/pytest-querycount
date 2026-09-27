@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pytest-querycount"
+dynamic = ["version"]
+description = "Fail your tests when they run too many SQL queries. Catch N+1 problems in CI, not in production."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Luis David Senra" }]
+keywords = [
+    "pytest", "sql", "sqlalchemy", "n+1", "performance",
+    "query-count", "testing", "orm", "database",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = ["pytest>=8.0"]
+
+[project.optional-dependencies]
+sqlalchemy = ["sqlalchemy>=2.0"]
+postgresql = ["sqlalchemy>=2.0", "psycopg[binary]>=3.1"]
+dev = [
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pytest>=8.0",
+    "mypy>=1.8",
+    "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/ldavidsm/pytest-querycount"
+Issues = "https://github.com/ldavidsm/pytest-querycount/issues"
+Changelog = "https://github.com/ldavidsm/pytest-querycount/blob/main/CHANGELOG.md"
+
+[project.entry-points.pytest11]
+querycount = "pytest_querycount.plugin"
+
+[tool.hatch.version]
+path = "src/pytest_querycount/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pytest_querycount"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+files = ["src/pytest_querycount"]

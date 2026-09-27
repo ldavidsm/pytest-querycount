@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Actions go stale quietly: a pinned action keeps working while its runtime is
+  # deprecated underneath it, and the only signal is a warning in a log nobody
+  # reads. Weekly bumps turn that into a pull request.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
